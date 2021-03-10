@@ -284,15 +284,12 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             move = msgRcv->GetID();
             rt_mutex_release(&mutex_move);
             
-            // on ferme le socket robot et moniteur
-            
-            monitor.Close();
+            // on ferme le socket robot
             robot.Close();
-            
             // on ferme le serveur
-            //TODO
+            monitor.Close();
             // on deconnecte la caméra
-            //TODO
+            camera.close();
             // on remet a l'état intial
             //TODO
             
@@ -455,7 +452,6 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
     return msg;
 }
 
-
 void Tasks::OpenCamera(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
@@ -482,4 +478,3 @@ void Tasks::OpenCamera(void *arg){
         WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
     }
 }
-

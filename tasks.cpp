@@ -94,6 +94,10 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_sem_create(&sem_openCamera, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     cout << "Semaphores created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -120,6 +124,11 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_create(&th_move, "th_move", 0, PRIORITY_TMOVE, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
+    if(err = rt_task_create(&th_openCamera, "th_openCamera", 0, PRIORITY_TCAMERA, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -167,7 +176,13 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+
+    if(err = rt_task_star (&th_openCamera, (void(*)void*) & Tasks::OpenCamera, this)){
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     
+
     
 
     cout << "Tasks launched" << endl << flush;
@@ -438,5 +453,33 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
     } /**/
 
     return msg;
+}
+
+
+void Tasks::OpenCamera(void *arg){
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
+    
+    while(1) {
+        rt_sem_p(&sem_openCamera, TM_INFINITE);
+        
+        cout << "Open com camera(";
+        status = camera.Open();
+        cout << status;
+        cout << ")" << endl << flush;
+
+        Message * msgSend;
+        if (status < 0) {
+            msgSend = new Message(MESSAGE_ANSWER_NACK);
+        } else {
+            msgSend = new Message(MESSAGE_ANSWER_ACK);
+        }
+        WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
+    }
 }
 

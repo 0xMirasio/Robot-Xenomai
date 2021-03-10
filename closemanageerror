@@ -1,0 +1,127 @@
+task.h 
+
+    void CloseComRobot(void *arg);
+
+    RT_SEM sem_closeComRobot;
+    RT_TASK th_closeComRobot;
+
+
+
+
+task.cpp
+
+#define PRIORITY_TCLOSECOMROBOT 20
+
+
+if (err = rt_task_start(&th_closeComRobot, (void(*)(void*)) & Tasks::CloseComRobot, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
+    if (err = rt_task_create(&th_closeComRobot, "th_closeComRobot", 0, PRIORITY_TCLOSECOMROBOT, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
+if (err = rt_sem_create(&sem_closeComRobot, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
+    
+void Tasks::CloseComRobot(void *arg) {
+    int status;
+    int err;
+
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    /**************************************************************************************/
+    /* The task closeComRobot starts here                                                  */
+    /**************************************************************************************/
+    while (1) {
+        rt_sem_p(&sem_closeComRobot, TM_INFINITE);
+        cout << "Close serial com (";
+        
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        robotStarted = 0;
+        rt_mutex_release(&mutex_robotStarted);
+        
+        rt_mutex_acquire(&mutex_move, TM_INFINITE);
+        move = MESSAGE_ROBOT_STOP;
+        rt_mutex_release(&mutex_move);
+        
+        rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+        status = robot.Close();
+        rt_mutex_release(&mutex_robot);
+        
+        cout << status;
+        cout << ")" << endl << flush;
+
+        Message * msgSend;
+        if (status < 0) {
+            msgSend = new Message(MESSAGE_ANSWER_NACK);
+        } else {
+            msgSend = new Message(MESSAGE_ANSWER_ACK);
+        }
+        WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
+    }
+}
+
+
+void Tasks::MoveTask(void *arg) {
+    int rs;
+    int cpMove;
+    int cptErr = 0;
+    
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
+    rt_task_set_periodic(NULL, TM_NOW, 100000000);
+
+    while (1) {
+        rt_task_wait_period(NULL);
+        cout << "Periodic movement update";
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        rs = robotStarted;
+        rt_mutex_release(&mutex_robotStarted);
+        if (rs == 1) {
+            Message *  msgRcv;
+            rt_mutex_acquire(&mutex_move, TM_INFINITE);
+            cpMove = move;
+            rt_mutex_release(&mutex_move);
+            
+            cout << " move: " << cpMove;
+            
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            msgRcv = robot.Write(new Message((MessageID)cpMove));
+            rt_mutex_release(&mutex_robot);
+            
+            if(msgRcv->CompareID(MESSAGE_ANSWER_ROBOT_TIMEOUT)){
+                cptErr++;
+                if(cptErr > 3){
+                    
+                    cout << "Perte de communication" << endl << flush;
+                    Message * msgSend = new Message(MESSAGE_MONITOR_LOST);
+                    WriteInQueue(&q_messageToMon, msgSend);
+                    
+                    rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+                    robotStarted = 0;
+                    rt_mutex_release(&mutex_robotStarted);
+                    
+                    rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+                    robot.Close();
+                    rt_mutex_release(&mutex_robot);
+                }
+            }else{
+                cptErr = 0;
+            }
+        }
+        cout << endl << flush;
+    }
+}

@@ -48,10 +48,6 @@ public:
      */
     void Run();
     
-    /**
-     * @brief Unbind tasks
-     */
-    void Delete();
 
     /**
      * @brief Stops tasks
@@ -85,6 +81,7 @@ private:
     RT_TASK th_startRobot;
     RT_TASK th_move;
     RT_TASK th_openCamera;
+    RT_TASK th_battery;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -145,6 +142,7 @@ private:
      */
     void MoveTask(void *arg);
     
+    void BatteryTask();
     
     void OpenCamera(void *arg);
     

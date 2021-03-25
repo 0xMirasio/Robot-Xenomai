@@ -27,6 +27,7 @@
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TCAMERA 21
 #define PRIORITY_TCLOSECOMROBOT 20
+#define PRIORITY_TBATTERY 20
 
 
 /**
@@ -124,6 +125,10 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_create(&th_battery, "th_battery", 0, PRIORITY_TBATTERY, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     cout << "Tasks created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -177,57 +182,16 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_start(&th_battery, (void(*)(void*)) & Tasks::BatteryTask, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     
-
-    
+        
 
     cout << "Tasks launched" << endl << flush;
 }
 
-
-void Tasks::Delete() {
-    int err;
-
-    /*if (err = rt_task_delete(&th_server)) {
-        cerr << "1" << endl <<flush;
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-     * */
-    if (err = rt_task_delete(&th_sendToMon)) {
-        cerr << "2" << endl <<flush;
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_task_delete(&th_receiveFromMon)) {
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_task_delete(&th_openComRobot)) {
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_task_delete(&th_closeComRobot)) {
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_task_delete(&th_startRobot)) {
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    cout << "Move" << endl << flush;
-    if (err = rt_task_delete(&th_move)) {
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-
-    if(err = rt_task_delete(&th_openCamera)){
-        cerr << "Error task delete: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-   
-    cout << "Task/Mutex/Sem deleted" << endl << flush;
-}
 
 /**
  * @brief Arrêt des tâches
@@ -331,18 +295,19 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             
             this->Stop();
             // on remet a l'état intial
-            //TODO
             cout << "Reset supervisor" << endl << flush;  
-            system("/home/pi/start");
+            // ce code est sale, très très sale. OUi j'ai honte de ce que j'ai fait.
+            //MAIS 
+            //comme un vieux proverbe chinois le dit 
+            // un vieux code nul est toujours mieux qu'un code qui ne marche pas
+            const string SCRIPT = "import os\nf = open(\"/home/pi/out\", \"r\")\npath = f.readlines()[0].strip() + \"/superviseur-robot\"\nos.system(\"sudo {0}\".format(path))";
+            const string CMD = "echo '" + SCRIPT + "' > /home/pi/script.py";
+            const char *cstr = CMD.c_str();
+            system(cstr);
+            system("pwd > /home/pi/out");
+            system("python3 /home/pi/start.py");
             
-            /*
-             *  #!/bin/bash
-ps -u root | grep superviseur-rob | awk {'print $1'} | xargs kill -9 
-echo "Done killing superviseur-rob process"
-$path=$('find . -name "superviseur-robot" | grep dist | grep netbeans | grep poncetta')
-echo $path
-             */
-            
+           
         }
         
         else if (msgRcv->CompareID(MESSAGE_ROBOT_COM_OPEN)) {
@@ -355,7 +320,7 @@ echo $path
         }
         
         else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITHOUT_WD)) {
-            rt_sem_v(&sem_startRobot);
+            rt_sem_broadcast(&sem_startRobot);
             
             
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
@@ -371,6 +336,7 @@ echo $path
         }
         delete(msgRcv); // mus be deleted manually, no consumer
     }
+ 
 }
 
 /**
@@ -494,6 +460,32 @@ void Tasks::MoveTask(void *arg) {
             }
         }
         cout << endl << flush;
+    }
+}
+
+void Tasks::BatteryTask(){   
+    Message * Lbatterie;
+        
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    rt_sem_p(&sem_startRobot, TM_INFINITE);
+
+    rt_task_set_periodic(NULL, TM_NOW, 2000000000);
+
+    cout << "Battery check" <<endl;
+    
+    while(1){
+        cout << "In the while" <<endl;
+        rt_task_wait_period(NULL);
+        
+        rt_mutex_acquire(&mutex_robot, TM_INFINITE);   
+        Lbatterie = robot.Write(robot.GetBattery());
+        rt_mutex_release(&mutex_robot);      
+        
+        cout << Lbatterie->ToString() <<endl;
+
+        WriteInQueue(&q_messageToMon, Lbatterie);   
     }
 }
 /**

@@ -28,24 +28,6 @@
 #define PRIORITY_TCAMERA 21
 #define PRIORITY_TCLOSECOMROBOT 20
 
-/*
- * Some remarks:
- * 1- This program is mostly a template. It shows you how to create tasks, semaphore
- *   message queues, mutex ... and how to use them
- * 
- * 2- semDumber is, as name say, useless. Its goal is only to show you how to use semaphore
- * 
- * 3- Data flow is probably not optimal
- * 
- * 4- Take into account that ComRobot::Write will block your task when serial buffer is full,
- *   time for internal buffer to flush
- * 
- * 5- Same behavior existe for ComMonitor::Write !
- * 
- * 6- When you want to write something in terminal, use cout and terminate with endl and flush
- * 
- * 7- Good luck !
- */
 
 /**
  * @brief Initialisation des structures de l'application (tâches, mutex, 
@@ -202,12 +184,58 @@ void Tasks::Run() {
     cout << "Tasks launched" << endl << flush;
 }
 
+
+void Tasks::Delete() {
+    int err;
+
+    /*if (err = rt_task_delete(&th_server)) {
+        cerr << "1" << endl <<flush;
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+     * */
+    if (err = rt_task_delete(&th_sendToMon)) {
+        cerr << "2" << endl <<flush;
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_delete(&th_receiveFromMon)) {
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_delete(&th_openComRobot)) {
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_delete(&th_closeComRobot)) {
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_delete(&th_startRobot)) {
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    cout << "Move" << endl << flush;
+    if (err = rt_task_delete(&th_move)) {
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+
+    if(err = rt_task_delete(&th_openCamera)){
+        cerr << "Error task delete: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+   
+    cout << "Task/Mutex/Sem deleted" << endl << flush;
+}
+
 /**
  * @brief Arrêt des tâches
  */
 void Tasks::Stop() {
     monitor.Close();
     robot.Close();
+    camera.Close();
 }
 
 /**
@@ -289,28 +317,36 @@ void Tasks::ReceiveFromMonTask(void *arg) {
     while (1) {
         msgRcv = monitor.Read();
         cout << "Rcv <= " << msgRcv->ToString() << endl << flush;
-
+        
         if (msgRcv->CompareID(MESSAGE_MONITOR_LOST)) {
             delete(msgRcv);
             //on arrete le robot
-            msgRcv->CompareID(MESSAGE_ROBOT_STOP);
             rt_mutex_acquire(&mutex_move, TM_INFINITE);
-            move = msgRcv->GetID();
+            move = MESSAGE_ROBOT_STOP;
             rt_mutex_release(&mutex_move);
+
+            rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+            robotStarted = 0;
+            rt_mutex_release(&mutex_robotStarted);
             
-            // on ferme le socket robot
-            robot.Close();
-            // on ferme le serveur
-            monitor.Close();
-            // on deconnecte la caméra
-            camera.Close();
+            this->Stop();
             // on remet a l'état intial
             //TODO
+            cout << "Reset supervisor" << endl << flush;  
+            system("/home/pi/start");
             
-            exit(-1);
+            /*
+             *  #!/bin/bash
+ps -u root | grep superviseur-rob | awk {'print $1'} | xargs kill -9 
+echo "Done killing superviseur-rob process"
+$path=$('find . -name "superviseur-robot" | grep dist | grep netbeans | grep poncetta')
+echo $path
+             */
+            
         }
         
         else if (msgRcv->CompareID(MESSAGE_ROBOT_COM_OPEN)) {
+            lock =1;
             rt_sem_v(&sem_openComRobot);
         }
         
@@ -326,6 +362,7 @@ void Tasks::ReceiveFromMonTask(void *arg) {
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_LEFT) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_RIGHT) ||
+                msgRcv->CompareID(MESSAGE_ROBOT_RESET) || 
                 msgRcv->CompareID(MESSAGE_ROBOT_STOP)) {
 
             rt_mutex_acquire(&mutex_move, TM_INFINITE);
@@ -360,12 +397,16 @@ void Tasks::OpenComRobot(void *arg) {
         cout << ")" << endl << flush;
 
         Message * msgSend;
-        if (status < 0) {
-            msgSend = new Message(MESSAGE_ANSWER_NACK);
-        } else {
-            msgSend = new Message(MESSAGE_ANSWER_ACK);
+        if (lock) {
+           if (status < 0) {
+                msgSend = new Message(MESSAGE_ANSWER_NACK);
+           } 
+           else {
+                msgSend = new Message(MESSAGE_ANSWER_ACK);
+           }
+            WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
         }
-        WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
+       
     }
 }
 
@@ -442,17 +483,11 @@ void Tasks::MoveTask(void *arg) {
                 cptErr++;
                 if(cptErr > 3){
                     
-                    cout << "Perte de communication" << endl << flush;
-                    Message * msgSend = new Message(MESSAGE_MONITOR_LOST);
+                    cout << "\nPerte de communication" << endl << flush;
+                    Message * msgSend = new Message(MESSAGE_ANSWER_COM_ERROR);
                     WriteInQueue(&q_messageToMon, msgSend);
                     
-                    rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
-                    robotStarted = 0;
-                    rt_mutex_release(&mutex_robotStarted);
-                    
-                    rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-                    robot.Close();
-                    rt_mutex_release(&mutex_robot);
+                    rt_sem_v(&sem_closeComRobot);
                 }
             }else{
                 cptErr = 0;
@@ -536,13 +571,14 @@ void Tasks::CloseComRobot(void *arg) {
         rt_sem_p(&sem_closeComRobot, TM_INFINITE);
         cout << "Close serial com (";
         
-        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
-        robotStarted = 0;
-        rt_mutex_release(&mutex_robotStarted);
-        
         rt_mutex_acquire(&mutex_move, TM_INFINITE);
         move = MESSAGE_ROBOT_STOP;
         rt_mutex_release(&mutex_move);
+        
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        robotStarted = 0;
+        rt_mutex_release(&mutex_robotStarted);
+       
         
         rt_mutex_acquire(&mutex_robot, TM_INFINITE);
         status = robot.Close();
@@ -550,13 +586,9 @@ void Tasks::CloseComRobot(void *arg) {
         
         cout << status;
         cout << ")" << endl << flush;
+        
+        lock = 0; //on force l'ouverture de la com , on ne veux d'ack vers mon
+        rt_sem_v(&sem_openComRobot);
 
-        Message * msgSend;
-        if (status < 0) {
-            msgSend = new Message(MESSAGE_ANSWER_NACK);
-        } else {
-            msgSend = new Message(MESSAGE_ANSWER_ACK);
-        }
-        WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
     }
 }

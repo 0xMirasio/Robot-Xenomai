@@ -47,6 +47,11 @@ public:
      * @brief Starts tasks
      */
     void Run();
+    
+    /**
+     * @brief Unbind tasks
+     */
+    void Delete();
 
     /**
      * @brief Stops tasks
@@ -66,6 +71,7 @@ private:
     ComRobot robot;
     Camera camera;
     int robotStarted = 0;
+    int lock = 1; // toLock ACK/NACK Send
     int move = MESSAGE_ROBOT_STOP;
     
     /**********************************************************************/
@@ -162,4 +168,3 @@ private:
 };
 
 #endif // __TASKS_H__ 
-

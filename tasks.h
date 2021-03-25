@@ -47,6 +47,7 @@ public:
      * @brief Starts tasks
      */
     void Run();
+    
 
     /**
      * @brief Stops tasks
@@ -66,6 +67,7 @@ private:
     ComRobot robot;
     Camera camera;
     int robotStarted = 0;
+    int lock = 1; // toLock ACK/NACK Send
     int move = MESSAGE_ROBOT_STOP;
     
     /**********************************************************************/
@@ -75,9 +77,11 @@ private:
     RT_TASK th_sendToMon;
     RT_TASK th_receiveFromMon;
     RT_TASK th_openComRobot;
+    RT_TASK th_closeComRobot;
     RT_TASK th_startRobot;
     RT_TASK th_move;
     RT_TASK th_openCamera;
+    RT_TASK th_battery;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -92,6 +96,7 @@ private:
     /**********************************************************************/
     RT_SEM sem_barrier;
     RT_SEM sem_openComRobot;
+    RT_SEM sem_closeComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
     RT_SEM sem_openCamera;
@@ -125,6 +130,8 @@ private:
      */
     void OpenComRobot(void *arg);
 
+    void CloseComRobot(void *arg);
+
     /**
      * @brief Thread starting the communication with the robot.
      */
@@ -135,6 +142,7 @@ private:
      */
     void MoveTask(void *arg);
     
+    void BatteryTask();
     
     void OpenCamera(void *arg);
     
@@ -158,4 +166,3 @@ private:
 };
 
 #endif // __TASKS_H__ 
-

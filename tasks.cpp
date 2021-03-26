@@ -27,7 +27,8 @@
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TCAMERA 21
 #define PRIORITY_TCLOSECOMROBOT 20
-#define PRIORITY_TBATTERY 20
+#define PRIORITY_TBATTERY 19
+#define PRIORITY_TRELOADWD 20
 
 
 /**
@@ -82,6 +83,12 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    
+    if (err = rt_sem_create(&sem_wd, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
     if (err = rt_sem_create(&sem_openCamera, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
@@ -126,6 +133,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_create(&th_battery, "th_battery", 0, PRIORITY_TBATTERY, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_reloadWD, "th_reloadWD", 0, PRIORITY_TRELOADWD, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -183,6 +194,11 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_start(&th_battery, (void(*)(void*)) & Tasks::BatteryTask, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
+    if (err = rt_task_start(&th_reloadWD, (void(*)(void*)) & Tasks::ReloadWDTask, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -301,7 +317,7 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             //comme un vieux proverbe chinois le dit 
             // un vieux code nul est toujours mieux qu'un code qui ne marche pas
             const string SCRIPT = "import os\nf = open(\"/home/pi/out\", \"r\")\npath = f.readlines()[0].strip() + \"/superviseur-robot\"\nos.system(\"sudo {0}\".format(path))";
-            const string CMD = "echo '" + SCRIPT + "' > /home/pi/script.py";
+            const string CMD = "echo '" + SCRIPT + "' > /home/pi/start.py";
             const char *cstr = CMD.c_str();
             system(cstr);
             system("pwd > /home/pi/out");
@@ -317,12 +333,14 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         
         else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
             rt_sem_v(&sem_openCamera);
-        }
-        
-        else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITHOUT_WD)) {
-            rt_sem_broadcast(&sem_startRobot);
-            
-            
+  
+        } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITHOUT_WD)) {
+            this->mode = 0;
+            rt_sem_v(&sem_startRobot);
+        } else if(msgRcv->CompareID(MESSAGE_ROBOT_START_WITH_WD)){
+            this->mode = 1;
+            rt_sem_v(&sem_startRobot);
+             
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_LEFT) ||
@@ -376,6 +394,43 @@ void Tasks::OpenComRobot(void *arg) {
     }
 }
 
+void Tasks::CloseComRobot(void *arg) {
+    int status;
+    int err;
+
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    /**************************************************************************************/
+    /* The task closeComRobot starts here                                                  */
+    /**************************************************************************************/
+    while (1) {
+        rt_sem_p(&sem_closeComRobot, TM_INFINITE);
+        cout << "Close serial com (";
+        
+        rt_mutex_acquire(&mutex_move, TM_INFINITE);
+        move = MESSAGE_ROBOT_STOP;
+        rt_mutex_release(&mutex_move);
+        
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        robotStarted = 0;
+        rt_mutex_release(&mutex_robotStarted);
+       
+        
+        rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+        status = robot.Close();
+        rt_mutex_release(&mutex_robot);
+        
+        cout << status;
+        cout << ")" << endl << flush;
+        
+        lock = 0; //on force l'ouverture de la com , on ne veux d'ack vers mon
+        rt_sem_v(&sem_openComRobot);
+
+    }
+}
+
 /**
  * @brief Thread starting the communication with the robot.
  */
@@ -391,24 +446,38 @@ void Tasks::StartRobotTask(void *arg) {
 
         Message * msgSend;
         rt_sem_p(&sem_startRobot, TM_INFINITE);
-        cout << "Start robot without watchdog (";
-        rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-        msgSend = robot.Write(robot.StartWithoutWD());
-        rt_mutex_release(&mutex_robot);
+        
+        if(this->mode == 0){
+            cout << "Start robot without watchdog (";
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            msgSend = robot.Write(robot.StartWithoutWD());
+            rt_mutex_release(&mutex_robot);
+        
+        }else if(this->mode == 1){
+            cout << "Start robot with watchdog (";
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            msgSend = robot.Write(robot.StartWithWD());
+            rt_mutex_release(&mutex_robot);
+        }
+        
+        
         cout << msgSend->GetID();
         cout << ")" << endl;
 
         cout << "Movement answer: " << msgSend->ToString() << endl << flush;
         WriteInQueue(&q_messageToMon, msgSend);  // msgSend will be deleted by sendToMon
-        
+
         if (msgSend->GetID() == MESSAGE_ANSWER_ACK) {
+            if(this->mode == 1){
+                rt_sem_v(&sem_wd);
+            }
             rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
             robotStarted = 1;
             rt_mutex_release(&mutex_robotStarted);
-            
         }
     }
 }
+
 
 /**
  * @brief Thread handling control of the robot.
@@ -429,7 +498,7 @@ void Tasks::MoveTask(void *arg) {
 
     while (1) {
         rt_task_wait_period(NULL);
-        cout << "Periodic movement update";
+        //cout << "Periodic movement update";
         rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
         rs = robotStarted;
         rt_mutex_release(&mutex_robotStarted);
@@ -439,7 +508,7 @@ void Tasks::MoveTask(void *arg) {
             cpMove = move;
             rt_mutex_release(&mutex_move);
             
-            cout << " move: " << cpMove;
+            //cout << " move: " << cpMove;
             
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
             msgRcv = robot.Write(new Message((MessageID)cpMove));
@@ -459,9 +528,31 @@ void Tasks::MoveTask(void *arg) {
                 cptErr = 0;
             }
         }
-        cout << endl << flush;
+        //cout << endl << flush;
     }
 }
+
+void Tasks::ReloadWDTask(void *arg){
+    
+    
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    rt_sem_p(&sem_wd, TM_INFINITE);
+    
+    rt_task_set_periodic(NULL, TM_NOW, 1000000000);
+
+    while(1){
+        rt_task_wait_period(NULL);
+        cout << "1S CHECK" <<endl << flush;
+        if(this->robotStarted == 1 && this->mode == 1){
+            cout << "In RELOAD WD" << endl << flush;
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            robot.Write(new Message(MESSAGE_ROBOT_RELOAD_WD));
+            rt_mutex_release(&mutex_robot);
+        }   
+    }
+}
+
 
 void Tasks::BatteryTask(){   
     Message * Lbatterie;
@@ -488,6 +579,8 @@ void Tasks::BatteryTask(){
         WriteInQueue(&q_messageToMon, Lbatterie);   
     }
 }
+
+
 /**
  * Write a message in a given queue
  * @param queue Queue identifier
@@ -545,42 +638,5 @@ void Tasks::OpenCamera(void *arg){
             msgSend = new Message(MESSAGE_ANSWER_ACK);
         }
         WriteInQueue(&q_messageToMon, msgSend); // msgSend will be deleted by sendToMon
-    }
-}
-
-void Tasks::CloseComRobot(void *arg) {
-    int status;
-    int err;
-
-    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
-    // Synchronization barrier (waiting that all tasks are starting)
-    rt_sem_p(&sem_barrier, TM_INFINITE);
-    
-    /**************************************************************************************/
-    /* The task closeComRobot starts here                                                  */
-    /**************************************************************************************/
-    while (1) {
-        rt_sem_p(&sem_closeComRobot, TM_INFINITE);
-        cout << "Close serial com (";
-        
-        rt_mutex_acquire(&mutex_move, TM_INFINITE);
-        move = MESSAGE_ROBOT_STOP;
-        rt_mutex_release(&mutex_move);
-        
-        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
-        robotStarted = 0;
-        rt_mutex_release(&mutex_robotStarted);
-       
-        
-        rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-        status = robot.Close();
-        rt_mutex_release(&mutex_robot);
-        
-        cout << status;
-        cout << ")" << endl << flush;
-        
-        lock = 0; //on force l'ouverture de la com , on ne veux d'ack vers mon
-        rt_sem_v(&sem_openComRobot);
-
     }
 }

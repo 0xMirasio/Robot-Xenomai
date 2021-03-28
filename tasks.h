@@ -47,7 +47,6 @@ public:
      * @brief Starts tasks
      */
     void Run();
-    
 
     /**
      * @brief Stops tasks
@@ -66,10 +65,17 @@ private:
     ComMonitor monitor;
     ComRobot robot;
     Camera camera;
+    Arena *arena = 0;
+    std::list<Position> *positionList = 0;
     int robotStarted = 0;
-    int mode = 0;
-    int lock = 1; // toLock ACK/NACK Send
+    int cptErr = 0;
     int move = MESSAGE_ROBOT_STOP;
+    bool serverStarted = false;
+    bool comRobotStarted = false;
+    bool cameraStarted = false;
+    bool askArena = false;
+    bool computePosition = false;
+    int mode = 0;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -81,9 +87,12 @@ private:
     RT_TASK th_closeComRobot;
     RT_TASK th_startRobot;
     RT_TASK th_move;
-    RT_TASK th_openCamera;
-    RT_TASK th_battery;
     RT_TASK th_reloadWD;
+    RT_TASK th_battery;
+    RT_TASK th_openCamera;
+    RT_TASK th_closeCamera;
+    RT_TASK th_sendImg;
+    RT_TASK th_getArena;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -92,6 +101,10 @@ private:
     RT_MUTEX mutex_robot;
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
+    RT_MUTEX mutex_camera;
+    RT_MUTEX mutex_cameraStarted;
+    RT_MUTEX mutex_askArena;
+    RT_MUTEX mutex_computePosition;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -99,10 +112,14 @@ private:
     RT_SEM sem_barrier;
     RT_SEM sem_openComRobot;
     RT_SEM sem_closeComRobot;
+    RT_SEM sem_robotStarted;
     RT_SEM sem_serverOk;
-    RT_SEM sem_wd;
+    RT_SEM sem_restartServer;
     RT_SEM sem_startRobot;
+    RT_SEM sem_wd;
     RT_SEM sem_openCamera;
+    RT_SEM sem_closeCamera;
+    RT_SEM sem_askArena;
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -134,22 +151,27 @@ private:
     void OpenComRobot(void *arg);
 
     void CloseComRobot(void *arg);
-
     /**
      * @brief Thread starting the communication with the robot.
      */
     void StartRobotTask(void *arg);
     
-    
-    void ReloadWDTask(void *arg);
     /**
      * @brief Thread handling control of the robot.
      */
     void MoveTask(void *arg);
-    
-    void BatteryTask();
+
+    void ReloadWDTask(void *arg);
+
+    void BatteryTask(void *arg);
     
     void OpenCamera(void *arg);
+    
+    void CloseCamera(void *arg);
+    
+    void SendImage(void *arg);
+    
+    void GetArena(void *arg);
     
     /**********************************************************************/
     /* Queue services                                                     */
@@ -168,6 +190,15 @@ private:
      */
     Message *ReadInQueue(RT_QUEUE *queue);
 
+
+    void CheckComRobot(Message *message);
+
+    void SendReset();
+    
+    int GetRobotStarted();
+    
+    bool GetCameraStarted();
 };
 
 #endif // __TASKS_H__ 
+
